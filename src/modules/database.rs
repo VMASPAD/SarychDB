@@ -53,7 +53,7 @@ impl DatabaseManager {
                     Some("value") => self.search_by_value(&data, q),
                     _ => {
                         // Default behavior - search in entire structure
-                        let nodes = split_nodes(data, 4);
+                        let nodes = split_nodes(data, 17);
                         parallel_search(&nodes, q).into_iter().cloned().collect()
                     }
                 };

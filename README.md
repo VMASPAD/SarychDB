@@ -1,5 +1,9 @@
 # SarychDB
 
+<div align="center">
+  <img src="SDB.svg" alt="SarychDB Logo" width="200"/>
+</div>
+
 ## 🚀 Start the Server
 
 ```bash
