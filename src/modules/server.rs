@@ -1,7 +1,6 @@
 use warp::{Filter, Reply, Rejection};
 use serde_json::Value;
-use std::collections::HashMap;
-use url::Url;
+use std::collections::HashMap; 
 use crate::modules::auth::{AuthService, CreateUserRequest, CreateDbRequest};
 use crate::modules::database::DatabaseManager;
 
@@ -119,17 +118,27 @@ impl SarychServer {
         })
     }
 
-    // Manejar operaciones del protocolo SarychDB
-    pub async fn handle_sarych_request(url_str: String, body: Option<Value>) -> Result<impl Reply, Rejection> {
+    // Handle SarychDB protocol operations with header authentication
+    pub async fn handle_sarych_request(
+        url_str: String, 
+        body: Option<Value>, 
+        username: String, 
+        password: String,
+        query_type: Option<String>,
+        id_update: Option<String>
+    ) -> Result<impl Reply, Rejection> {
+        let operation_start = std::time::Instant::now();
         let auth_service = AuthService::new();
         let db_manager = DatabaseManager::new();
+        
+        // Parse URL but ignore username/password from URL since we use headers
         let protocol = match Self::parse_sarych_url(&url_str) {
             Ok(p) => p,
             Err(e) => return Ok(warp::reply::with_status(e, warp::http::StatusCode::BAD_REQUEST)),
         };
 
-        // Verify authentication
-        if let Err(e) = auth_service.authenticate(&protocol.username, &protocol.password) {
+        // Verify authentication using headers
+        if let Err(e) = auth_service.authenticate(&username, &password) {
             return Ok(warp::reply::with_status(
                 format!("Authentication error: {}", e),
                 warp::http::StatusCode::UNAUTHORIZED,
@@ -137,49 +146,65 @@ impl SarychServer {
         }
 
         // Verify user has access to database
-        if let Err(e) = auth_service.user_has_database(&protocol.username, &protocol.password, &protocol.database) {
+        if let Err(e) = auth_service.user_has_database(&username, &password, &protocol.database) {
             return Ok(warp::reply::with_status(
                 format!("Database access denied: {}", e),
                 warp::http::StatusCode::FORBIDDEN,
             ));
         }
 
-        // Process operation
+        // Process operation with new parameters
         let result = match protocol.operation.to_lowercase().as_str() {
-            "get" => Self::handle_get(&db_manager, &protocol).await,
-            "post" => Self::handle_post(&db_manager, &protocol, body).await,
-            "put" => Self::handle_put(&db_manager, &protocol, body).await,
-            "delete" => Self::handle_delete(&db_manager, &protocol).await,
-            "stats" => Self::handle_stats(&db_manager, &protocol).await,
+            "get" => Self::handle_get(&db_manager, &protocol, query_type.as_deref()).await,
+            "post" => Self::handle_post(&db_manager, &protocol, body, &username).await,
+            "put" => Self::handle_put(&db_manager, &protocol, body, &username, id_update.as_deref()).await,
+            "delete" => Self::handle_delete(&db_manager, &protocol, &username).await,
+            "stats" => Self::handle_stats(&db_manager, &protocol, &username).await,
+            "health" => Self::health().await,
             _ => Err("Unsupported operation. Use: get, post, put, delete, stats".to_string()),
         };
 
+        let operation_time = operation_start.elapsed().as_millis();
+
         match result {
-            Ok(response) => Ok(warp::reply::with_status(
-                serde_json::to_string(&response).unwrap_or_default(),
-                warp::http::StatusCode::OK,
-            )),
-            Err(e) => Ok(warp::reply::with_status(
-                e,
-                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )),
+            Ok(mut response) => {
+                // Add operation time to all responses
+                if let Some(obj) = response.as_object_mut() {
+                    obj.insert("time".to_string(), serde_json::Value::Number((operation_time as u64).into()));
+                }
+                Ok(warp::reply::with_status(
+                    serde_json::to_string(&response).unwrap_or_default(),
+                    warp::http::StatusCode::OK,
+                ))
+            },
+            Err(e) => {
+                let error_response = serde_json::json!({
+                    "error": e,
+                    "time": operation_time
+                });
+                Ok(warp::reply::with_status(
+                    serde_json::to_string(&error_response).unwrap_or_default(),
+                    warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                ))
+            },
         }
     }
 
-    async fn handle_get(db_manager: &DatabaseManager, protocol: &SarychProtocol) -> Result<Value, String> {
-        let results = db_manager.search_records(&protocol.username, &protocol.database, protocol.query.as_deref())?;
+    async fn handle_get(db_manager: &DatabaseManager, protocol: &SarychProtocol, query_type: Option<&str>) -> Result<Value, String> {
+        let results = db_manager.search_records(&protocol.username, &protocol.database, protocol.query.as_deref(), query_type)?;
         Ok(serde_json::json!({
             "operation": "get",
             "database": protocol.database,
             "query": protocol.query,
+            "query_type": query_type,
             "results": results,
             "count": results.len()
         }))
     }
 
-    async fn handle_post(db_manager: &DatabaseManager, protocol: &SarychProtocol, body: Option<Value>) -> Result<Value, String> {
+    async fn handle_post(db_manager: &DatabaseManager, protocol: &SarychProtocol, body: Option<Value>, username: &str) -> Result<Value, String> {
         let record = body.ok_or("Body required for POST operation")?;
-        let message = db_manager.insert_record(&protocol.username, &protocol.database, record)?;
+        let message = db_manager.insert_record(username, &protocol.database, record)?;
         Ok(serde_json::json!({
             "operation": "post",
             "database": protocol.database,
@@ -187,21 +212,30 @@ impl SarychServer {
         }))
     }
 
-    async fn handle_put(db_manager: &DatabaseManager, protocol: &SarychProtocol, body: Option<Value>) -> Result<Value, String> {
+    async fn handle_put(db_manager: &DatabaseManager, protocol: &SarychProtocol, body: Option<Value>, username: &str, id_update: Option<&str>) -> Result<Value, String> {
         let update_data = body.ok_or("Body required for PUT operation")?;
-        let query = protocol.query.as_deref().ok_or("Query required for PUT operation")?;
-        let message = db_manager.update_records(&protocol.username, &protocol.database, query, update_data)?;
+        
+        let message = if let Some(id) = id_update {
+            // Update by ID
+            db_manager.update_records(username, &protocol.database, "", update_data, Some(id))?
+        } else {
+            // Update by query (existing behavior)
+            let query = protocol.query.as_deref().ok_or("Query or idUpdate header required for PUT operation")?;
+            db_manager.update_records(username, &protocol.database, query, update_data, None)?
+        };
+        
         Ok(serde_json::json!({
             "operation": "put",
             "database": protocol.database,
-            "query": query,
+            "query": protocol.query,
+            "id_update": id_update,
             "message": message
         }))
     }
 
-    async fn handle_delete(db_manager: &DatabaseManager, protocol: &SarychProtocol) -> Result<Value, String> {
+    async fn handle_delete(db_manager: &DatabaseManager, protocol: &SarychProtocol, username: &str) -> Result<Value, String> {
         let query = protocol.query.as_deref().ok_or("Query required for DELETE operation")?;
-        let message = db_manager.delete_records(&protocol.username, &protocol.database, query)?;
+        let message = db_manager.delete_records(username, &protocol.database, query)?;
         Ok(serde_json::json!({
             "operation": "delete",
             "database": protocol.database,
@@ -210,75 +244,122 @@ impl SarychServer {
         }))
     }
 
-    async fn handle_stats(db_manager: &DatabaseManager, protocol: &SarychProtocol) -> Result<Value, String> {
-        db_manager.get_stats(&protocol.username, &protocol.database)
+    async fn handle_stats(db_manager: &DatabaseManager, protocol: &SarychProtocol, username: &str) -> Result<Value, String> {
+        db_manager.get_stats(username, &protocol.database)
     }
-
-    // Crear usuario
+    async fn health() -> Result<Value, String> {
+        Ok(serde_json::json!({
+            "operation": "health",
+            "status": "ok",
+            "message": "SarychDB is healthy"
+        }))
+    } 
+    // Create user
     pub async fn create_user(request: CreateUserRequest) -> Result<impl Reply, Rejection> {
+        let start_time = std::time::Instant::now();
         let auth_service = AuthService::new();
         match auth_service.create_user(request) {
-            Ok(message) => Ok(warp::reply::with_status(
-                serde_json::json!({"message": message}).to_string(),
-                warp::http::StatusCode::CREATED,
-            )),
-            Err(e) => Ok(warp::reply::with_status(
-                serde_json::json!({"error": e}).to_string(),
-                warp::http::StatusCode::BAD_REQUEST,
-            )),
+            Ok(message) => {
+                let operation_time = start_time.elapsed().as_millis();
+                Ok(warp::reply::with_status(
+                    serde_json::json!({
+                        "message": message,
+                        "time": operation_time as u64
+                    }).to_string(),
+                    warp::http::StatusCode::CREATED,
+                ))
+            },
+            Err(e) => {
+                let operation_time = start_time.elapsed().as_millis();
+                Ok(warp::reply::with_status(
+                    serde_json::json!({
+                        "error": e,
+                        "time": operation_time as u64
+                    }).to_string(),
+                    warp::http::StatusCode::BAD_REQUEST,
+                ))
+            },
         }
     }
 
-    // Crear base de datos
+    // Create database
     pub async fn create_database(request: CreateDbRequest) -> Result<impl Reply, Rejection> {
+        let start_time = std::time::Instant::now();
         let auth_service = AuthService::new();
         match auth_service.create_database(request) {
-            Ok(message) => Ok(warp::reply::with_status(
-                serde_json::json!({"message": message}).to_string(),
-                warp::http::StatusCode::CREATED,
-            )),
-            Err(e) => Ok(warp::reply::with_status(
-                serde_json::json!({"error": e}).to_string(),
-                warp::http::StatusCode::BAD_REQUEST,
-            )),
+            Ok(message) => {
+                let operation_time = start_time.elapsed().as_millis();
+                Ok(warp::reply::with_status(
+                    serde_json::json!({
+                        "message": message,
+                        "time": operation_time as u64
+                    }).to_string(),
+                    warp::http::StatusCode::CREATED,
+                ))
+            },
+            Err(e) => {
+                let operation_time = start_time.elapsed().as_millis();
+                Ok(warp::reply::with_status(
+                    serde_json::json!({
+                        "error": e,
+                        "time": operation_time as u64
+                    }).to_string(),
+                    warp::http::StatusCode::BAD_REQUEST,
+                ))
+            },
         }
     }
 
-    // Listar bases de datos de un usuario
+    // List user databases
     pub async fn list_databases(username: String, password: String) -> Result<impl Reply, Rejection> {
+        let start_time = std::time::Instant::now();
         let auth_service = AuthService::new();
         match auth_service.get_user_databases(&username, &password) {
-            Ok(databases) => Ok(warp::reply::with_status(
-                serde_json::json!({
-                    "user": username,
-                    "databases": databases
-                }).to_string(),
-                warp::http::StatusCode::OK,
-            )),
-            Err(e) => Ok(warp::reply::with_status(
-                serde_json::json!({"error": e}).to_string(),
-                warp::http::StatusCode::UNAUTHORIZED,
-            )),
+            Ok(databases) => {
+                let operation_time = start_time.elapsed().as_millis();
+                Ok(warp::reply::with_status(
+                    serde_json::json!({
+                        "user": username,
+                        "databases": databases,
+                        "time": operation_time as u64
+                    }).to_string(),
+                    warp::http::StatusCode::OK,
+                ))
+            },
+            Err(e) => {
+                let operation_time = start_time.elapsed().as_millis();
+                Ok(warp::reply::with_status(
+                    serde_json::json!({
+                        "error": e,
+                        "time": operation_time as u64
+                    }).to_string(),
+                    warp::http::StatusCode::UNAUTHORIZED,
+                ))
+            },
         }
     }
 
     // Configurar rutas del servidor
     pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-        // Ruta para el protocolo SarychDB
+        // Ruta para el protocolo SarychDB con autenticación por headers
         let sarych_route = warp::path("sarych")
             .and(warp::query::<HashMap<String, String>>())
             .and(warp::body::bytes())
-            .and_then(|params: HashMap<String, String>, body: bytes::Bytes| async move {
+            .and(warp::header::<String>("username"))
+            .and(warp::header::<String>("password"))
+            .and(warp::header::optional::<String>("queryType"))
+            .and(warp::header::optional::<String>("idUpdate"))
+            .and_then(|params: HashMap<String, String>, body: bytes::Bytes, username: String, password: String, query_type: Option<String>, id_update: Option<String>| async move {
                 let url = params.get("url").ok_or_else(|| warp::reject::custom(RequestError::MissingUrl))?;
                 let json_body = if !body.is_empty() {
                     serde_json::from_slice(&body).ok()
                 } else {
                     None
                 };
-                SarychServer::handle_sarych_request(url.clone(), json_body).await
+                SarychServer::handle_sarych_request(url.clone(), json_body, username, password, query_type, id_update).await
             });
 
-        // Ruta para crear usuarios
+        // Route to create users
         let create_user_route = warp::path("api")
             .and(warp::path("users"))
             .and(warp::post())
@@ -327,12 +408,12 @@ impl warp::reject::Reject for RequestError {}
 pub async fn start_server(port: u16) {
     let routes = SarychServer::routes();
 
-    println!("🚀 SarychDB Server iniciado en puerto {}", port);
-    println!("📖 Documentación de la API:");
-    println!("  POST /api/users - Crear usuario");
-    println!("  POST /api/databases - Crear base de datos");
-    println!("  GET /api/databases - Listar bases de datos");
-    println!("  GET /sarych?url=sarychdb://user@pass/db/operation - Protocolo SarychDB");
+        println!("🚀 SarychDB server started on port {}", port);
+        println!("📖 API documentation:");
+        println!("  POST /api/users - Create user");
+        println!("  POST /api/databases - Create database");
+        println!("  GET /api/databases - List databases");
+        println!("  GET /sarych?url=sarychdb://user@pass/db/operation - SarychDB protocol");
 
     warp::serve(routes)
         .run(([127, 0, 0, 1], port))
