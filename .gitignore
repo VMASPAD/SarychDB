@@ -3,3 +3,5 @@
 500MB.json
 users.json
 users/
+tests/
+bench/

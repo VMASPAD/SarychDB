@@ -48,6 +48,29 @@ cargo run --release
 cargo run benchmark
 ```
 
+### CLI Flags
+
+The application accepts several command-line flags to override defaults.
+
+- `--port <number>`: Set the HTTP server port (default: `3030` or the `PORT` environment variable).
+- `benchmark`: Run the built-in benchmark mode instead of starting the server.
+- `--nodes <number>`: When running `benchmark`, split the dataset into the specified number of nodes (default: `8`).
+- `--background` or `--silent`: Run without printing console logs (useful for background processes).
+- `--foreground`: Re-enable console output if a silent flag was used.
+
+Examples:
+
+```powershell
+# Start server on port 3030 (default)
+cargo run
+
+# Start server on port 4000
+cargo run -- --port 4000
+
+# Run benchmark with 16 nodes and no console output
+cargo run -- benchmark --nodes 16 --background
+```
+
 ---
 
 ## 🌐 HTTP API Endpoints
@@ -103,7 +126,7 @@ curl "http://localhost:3030/api/databases?username=admin&password=my_secure_pass
 }
 ```
 
-## 🔗 SarychDB Protocol (Updated)
+## 🔗 SarychDB Protocol
 
 ### New URL Format:
 ```
