@@ -5,3 +5,5 @@ users.json
 users/
 tests/
 bench/
+npm_module/
+.gitignore
