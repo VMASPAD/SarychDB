@@ -125,37 +125,6 @@ Value::Array(arr) => {
 
 ---
 
-## 📈 Performance Comparison
-
-### Search on Large Dataset (50,000 records)
-
-| Method | Time (ms) | RAM Usage | CPU Usage |
-|--------|-----------|-----------|-----------|
-| **Before (fixed nodes)** | 450 ms | High | 30% (4/16 cores) |
-| **Now (optimized)** | 85 ms | Medium | 85% (14/16 cores) |
-| **With cache (2nd time)** | 8 ms | Low | 5% |
-
-**Improvements:**
-- 🚀 **5.3x faster** on first search
-- 🚀 **56x faster** with cache
-- 💾 **40% less RAM** through better distribution
-- ⚡ **3x better CPU utilization**
-
----
-
-### Search on Small Dataset (500 records)
-
-| Method | Time (ms) | Method Used |
-|--------|-----------|-------------|
-| **Before** | 12 ms | Parallel (unnecessary overhead) |
-| **Now (smart)** | 5 ms | Sequential (no overhead) |
-| **With cache** | 0.5 ms | Cache hit |
-
-**Improvements:**
-- 🚀 **2.4x faster** by avoiding parallelization overhead
-- 🧠 Intelligent decision based on size
-
----
 
 ## 🔧 Advanced Configuration
 
@@ -342,13 +311,6 @@ curl "http://localhost:3030/sarych?url=sarychdb://admin@pass/products/stats" \
 - Early return in searches
 - Automatic cache cleanup
 - Efficient load distribution
-
-### 📈 Final Results
-- 🚀 **5-6x faster** on first search
-- 🚀 **50-60x faster** with cache
-- 💾 **40% less RAM usage**
-- ⚡ **3x better CPU utilization**
-- 🧠 Automatic intelligent decisions
 
 ---
 
