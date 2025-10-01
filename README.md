@@ -4,6 +4,11 @@
   <img src="SDB.svg" alt="SarychDB Logo" width="200"/>
 </div>
 
+## Library
+
+[NPM](https://www.npmjs.com/package/sarychdb-client)
+
+
 ## 🚀 Start the Server
 
 ```bash
