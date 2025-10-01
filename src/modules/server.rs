@@ -14,17 +14,9 @@ pub struct SarychProtocol {
 }
 
 pub struct SarychServer {
-    auth_service: AuthService,
-    db_manager: DatabaseManager,
 }
 
 impl SarychServer {
-    pub fn new() -> Self {
-        Self {
-            auth_service: AuthService::new(),
-            db_manager: DatabaseManager::new(),
-        }
-    }
 
     // Parsear el protocolo sarychdb://usuario@password/database/operacion?query=valor
     pub fn parse_sarych_url(url_str: &str) -> Result<SarychProtocol, String> {
@@ -125,7 +117,12 @@ impl SarychServer {
         username: String, 
         password: String,
         query_type: Option<String>,
-        id_update: Option<String>
+        id_update: Option<String>,
+        page: Option<String>,
+        limit: Option<String>,
+        sort_by: Option<String>,
+        sort_order: Option<String>,
+        filters: Option<String>
     ) -> Result<impl Reply, Rejection> {
         let operation_start = std::time::Instant::now();
         let auth_service = AuthService::new();
@@ -156,12 +153,14 @@ impl SarychServer {
         // Process operation with new parameters
         let result = match protocol.operation.to_lowercase().as_str() {
             "get" => Self::handle_get(&db_manager, &protocol, query_type.as_deref()).await,
+            "browse" => Self::handle_browse(&db_manager, &protocol, page.as_deref(), limit.as_deref()).await,
+            "list" => Self::handle_list(&db_manager, &protocol, page.as_deref(), limit.as_deref(), sort_by.as_deref(), sort_order.as_deref(), filters.as_deref()).await,
             "post" => Self::handle_post(&db_manager, &protocol, body, &username).await,
             "put" => Self::handle_put(&db_manager, &protocol, body, &username, id_update.as_deref()).await,
             "delete" => Self::handle_delete(&db_manager, &protocol, &username).await,
             "stats" => Self::handle_stats(&db_manager, &protocol, &username).await,
             "health" => Self::health().await,
-            _ => Err("Unsupported operation. Use: get, post, put, delete, stats".to_string()),
+            _ => Err("Unsupported operation. Use: get, browse, list, post, put, delete, stats".to_string()),
         };
 
         let operation_time = operation_start.elapsed().as_millis();
@@ -199,6 +198,68 @@ impl SarychServer {
             "query_type": query_type,
             "results": results,
             "count": results.len()
+        }))
+    }
+
+    async fn handle_browse(
+        db_manager: &DatabaseManager,
+        protocol: &SarychProtocol,
+        page: Option<&str>,
+        limit: Option<&str>
+    ) -> Result<Value, String> {
+        // Parse pagination parameters
+        let limit_num = limit.and_then(|l| l.parse::<usize>().ok());
+        let page_num = page.and_then(|p| p.parse::<usize>().ok());
+
+        let result = db_manager.browse_records(
+            &protocol.username,
+            &protocol.database,
+            page_num,
+            limit_num
+        )?;
+
+        Ok(serde_json::json!({
+            "operation": "browse",
+            "database": protocol.database,
+            "data": result.get("data"),
+            "pagination": result.get("pagination")
+        }))
+    }
+
+    async fn handle_list(
+        db_manager: &DatabaseManager,
+        protocol: &SarychProtocol,
+        page: Option<&str>,
+        limit: Option<&str>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+        filters: Option<&str>
+    ) -> Result<Value, String> {
+        // Parse pagination parameters
+        let page_num = page.and_then(|p| p.parse::<usize>().ok());
+        let limit_num = limit.and_then(|l| l.parse::<usize>().ok());
+        
+        // Parse filters JSON
+        let filters_obj = filters.and_then(|f| {
+            serde_json::from_str::<Value>(f).ok()
+        });
+
+        let result = db_manager.list_records(
+            &protocol.username,
+            &protocol.database,
+            page_num,
+            limit_num,
+            sort_by,
+            sort_order,
+            filters_obj.as_ref()
+        )?;
+
+        Ok(serde_json::json!({
+            "operation": "list",
+            "database": protocol.database,
+            "data": result.get("data"),
+            "pagination": result.get("pagination"),
+            "sorting": result.get("sorting")
         }))
     }
 
@@ -253,6 +314,23 @@ impl SarychServer {
             "status": "ok",
             "message": "SarychDB is healthy"
         }))
+    }
+
+    // Public health check endpoint (no authentication required)
+    pub async fn public_health() -> Result<impl Reply, Rejection> {
+        let start_time = std::time::Instant::now();
+        let operation_time = start_time.elapsed().as_millis();
+        
+        Ok(warp::reply::with_status(
+            serde_json::json!({
+                "status": "ok",
+                "message": "SarychDB is healthy and running",
+                "service": "SarychDB",
+                "version": "2.0",
+                "time": operation_time as u64
+            }).to_string(),
+            warp::http::StatusCode::OK,
+        ))
     } 
     // Create user
     pub async fn create_user(request: CreateUserRequest) -> Result<impl Reply, Rejection> {
@@ -339,8 +417,45 @@ impl SarychServer {
         }
     }
 
+    // Clear search cache endpoint
+    pub async fn clear_cache(username: String, password: String) -> Result<impl Reply, Rejection> {
+        let start_time = std::time::Instant::now();
+        let auth_service = AuthService::new();
+        
+        // Verify authentication
+        if let Err(e) = auth_service.authenticate(&username, &password) {
+            let operation_time = start_time.elapsed().as_millis();
+            return Ok(warp::reply::with_status(
+                serde_json::json!({
+                    "error": format!("Authentication error: {}", e),
+                    "time": operation_time as u64
+                }).to_string(),
+                warp::http::StatusCode::UNAUTHORIZED,
+            ));
+        }
+
+        // Clear both database and search caches
+        use crate::modules::search::clear_search_cache;
+        clear_search_cache();
+        
+        let operation_time = start_time.elapsed().as_millis();
+        Ok(warp::reply::with_status(
+            serde_json::json!({
+                "message": "All caches cleared successfully",
+                "time": operation_time as u64
+            }).to_string(),
+            warp::http::StatusCode::OK,
+        ))
+    }
+
     // Configurar rutas del servidor
     pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+        // CORS configuration
+        let cors = warp::cors()
+            .allow_any_origin()
+            .allow_headers(vec!["content-type", "username", "password", "querytype", "idupdate", "page", "limit", "sortby", "sortorder", "filters", "authorization"])
+            .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"]);
+
         // Ruta para el protocolo SarychDB con autenticación por headers
         let sarych_route = warp::path("sarych")
             .and(warp::query::<HashMap<String, String>>())
@@ -349,15 +464,20 @@ impl SarychServer {
             .and(warp::header::<String>("password"))
             .and(warp::header::optional::<String>("queryType"))
             .and(warp::header::optional::<String>("idUpdate"))
-            .and_then(|params: HashMap<String, String>, body: bytes::Bytes, username: String, password: String, query_type: Option<String>, id_update: Option<String>| async move {
-                let url = params.get("url").ok_or_else(|| warp::reject::custom(RequestError::MissingUrl))?;
-                let json_body = if !body.is_empty() {
-                    serde_json::from_slice(&body).ok()
-                } else {
-                    None
-                };
-                SarychServer::handle_sarych_request(url.clone(), json_body, username, password, query_type, id_update).await
-            });
+            .and(warp::header::optional::<String>("page"))
+            .and(warp::header::optional::<String>("limit"))
+            .and(warp::header::optional::<String>("sortBy"))
+            .and(warp::header::optional::<String>("sortOrder"))
+            .and(warp::header::optional::<String>("filters"))
+            .and_then(|params: HashMap<String, String>, body: bytes::Bytes, username: String, password: String, query_type: Option<String>, id_update: Option<String>, page: Option<String>, limit: Option<String>, sort_by: Option<String>, sort_order: Option<String>, filters: Option<String>| async move {
+                 let url = params.get("url").ok_or_else(|| warp::reject::custom(RequestError::MissingUrl))?;
+                 let json_body = if !body.is_empty() {
+                     serde_json::from_slice(&body).ok()
+                 } else {
+                     None
+                 };
+                 SarychServer::handle_sarych_request(url.clone(), json_body, username, password, query_type, id_update, page, limit, sort_by, sort_order, filters).await
+             });
 
         // Route to create users
         let create_user_route = warp::path("api")
@@ -388,10 +508,32 @@ impl SarychServer {
                 SarychServer::list_databases(username, password).await
             });
 
+        // Public health check endpoint
+        let health_route = warp::path("health")
+            .and(warp::get())
+            .and_then(|| async move {
+                SarychServer::public_health().await
+            });
+
+        // Clear cache endpoint
+        let clear_cache_route = warp::path("api")
+            .and(warp::path("cache"))
+            .and(warp::path("clear"))
+            .and(warp::delete())
+            .and(warp::query::<HashMap<String, String>>())
+            .and_then(|params: HashMap<String, String>| async move {
+                let username = params.get("username").ok_or_else(|| warp::reject::custom(RequestError::MissingUsername))?.clone();
+                let password = params.get("password").ok_or_else(|| warp::reject::custom(RequestError::MissingPassword))?.clone();
+                SarychServer::clear_cache(username, password).await
+            });
+
         sarych_route
             .or(create_user_route)
             .or(create_db_route)
             .or(list_db_route)
+            .or(health_route)
+            .or(clear_cache_route)
+            .with(cors)
     }
 }
 
@@ -410,6 +552,7 @@ pub async fn start_server(port: u16) {
 
         println!("🚀 SarychDB server started on port {}", port);
         println!("📖 API documentation:");
+        println!("  GET /health - Health check (public)");
         println!("  POST /api/users - Create user");
         println!("  POST /api/databases - Create database");
         println!("  GET /api/databases - List databases");

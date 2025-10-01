@@ -6,4 +6,5 @@ users/
 tests/
 bench/
 npm_module/
+sarychdb-app/
 .gitignore
