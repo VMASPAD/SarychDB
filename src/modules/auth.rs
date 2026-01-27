@@ -39,6 +39,48 @@ fn data_root() -> PathBuf {
         })
 }
 
+fn legacy_data_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn migrate_legacy_data_if_needed() {
+    if env::var("SARYCHDB_DATA_DIR").is_ok() {
+        return;
+    }
+
+    let new_root = data_root();
+    let legacy_root = legacy_data_root();
+
+    if new_root.exists() {
+        return;
+    }
+
+    let legacy_users = legacy_root.join("users.json");
+    let legacy_users_dir = legacy_root.join("users");
+    if !legacy_users.exists() && !legacy_users_dir.exists() {
+        return;
+    }
+
+    if let Err(e) = fs::create_dir_all(&new_root) {
+        eprintln!("⚠️  Failed to create data directory {:?}: {}", new_root, e);
+        return;
+    }
+
+    let new_users = new_root.join("users.json");
+    if legacy_users.exists() && !new_users.exists() {
+        if let Err(e) = fs::rename(&legacy_users, &new_users) {
+            eprintln!("⚠️  Failed to move users.json to {:?}: {}", new_users, e);
+        }
+    }
+
+    let new_users_dir = new_root.join("users");
+    if legacy_users_dir.exists() && !new_users_dir.exists() {
+        if let Err(e) = fs::rename(&legacy_users_dir, &new_users_dir) {
+            eprintln!("⚠️  Failed to move users directory to {:?}: {}", new_users_dir, e);
+        }
+    }
+}
+
 fn users_file_path() -> PathBuf {
     data_root().join("users.json")
 }
@@ -51,6 +93,7 @@ pub struct AuthService;
 
 impl AuthService {
     pub fn new() -> Self {
+        migrate_legacy_data_if_needed();
         // Initialize users.json file if it doesn't exist
         let users_file = users_file_path();
         if !users_file.exists() {
