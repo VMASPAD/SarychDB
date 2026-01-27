@@ -1,6 +1,5 @@
 mod modules;
 
-use modules::server::start_server;
 use std::env;
 
 enum Mode {
@@ -10,7 +9,7 @@ enum Mode {
 
 struct CliConfig {
     mode: Mode,
-    port: Option<u16>,
+    protocol_port: Option<u16>,
     nodes: Option<usize>,
     threads: Option<usize>,
     silent: bool,
@@ -19,7 +18,7 @@ struct CliConfig {
 impl CliConfig {
     fn from_args(args: Vec<String>) -> Self {
         let mut mode = Mode::Server;
-        let mut port = None;
+        let mut protocol_port = None;
         let mut nodes = None;
         let mut threads = None;
         let mut silent = false;
@@ -33,7 +32,7 @@ impl CliConfig {
                 "--port" => {
                     if let Some(value) = iter.next() {
                         match value.parse::<u16>() {
-                            Ok(num) => port = Some(num),
+                            Ok(num) => protocol_port = Some(num),
                             Err(_) => eprintln!(
                                 "⚠️  Invalid value for --port: {} (using default).",
                                 value
@@ -41,6 +40,19 @@ impl CliConfig {
                         }
                     } else {
                         eprintln!("⚠️  Missing value for --port (using default).");
+                    }
+                }
+                "--protocol-port" => {
+                    if let Some(value) = iter.next() {
+                        match value.parse::<u16>() {
+                            Ok(num) => protocol_port = Some(num),
+                            Err(_) => eprintln!(
+                                "⚠️  Invalid value for --protocol-port: {} (using default).",
+                                value
+                            ),
+                        }
+                    } else {
+                        eprintln!("⚠️  Missing value for --protocol-port (using default).");
                     }
                 }
                 "--nodes" => {
@@ -90,7 +102,7 @@ impl CliConfig {
 
         CliConfig {
             mode,
-            port,
+            protocol_port,
             nodes,
             threads,
             silent,
@@ -114,26 +126,31 @@ async fn main() {
 
     match config.mode {
         Mode::Benchmark => run_benchmark_mode(config.nodes, config.silent).await,
-        Mode::Server => run_server_mode(config.port, config.silent).await,
+        Mode::Server => run_server_mode(config.protocol_port, config.silent).await,
     }
 }
 
-async fn run_server_mode(port_override: Option<u16>, silent: bool) {
-    let port = port_override
+async fn run_server_mode(protocol_port_override: Option<u16>, silent: bool) {
+    let protocol_port = protocol_port_override
+        .or_else(|| {
+            env::var("SARYCHDB_PROTOCOL_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+        })
         .or_else(|| {
             env::var("PORT")
                 .ok()
                 .and_then(|value| value.parse::<u16>().ok())
         })
-        .unwrap_or(3030);
+        .unwrap_or(4040);
 
     if !silent {
         println!("🌟 SarychDB - Parallel Database System");
         println!("======================================");
-        println!("🚀 Starting server on port {}", port);
+        println!("🛰️  Starting SarychDB protocol on port {}", protocol_port);
     }
-    
-    start_server(port).await;
+
+    modules::server::SarychServer::start_protocol_server(protocol_port).await;
 }
 
 async fn run_benchmark_mode(nodes_override: Option<usize>, silent: bool) {

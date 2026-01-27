@@ -4,138 +4,102 @@
   <img src="SDB.svg" alt="SarychDB Logo" width="200"/>
 </div>
 
-## Library
+## 📘 Uso rápido
 
-[NPM](https://www.npmjs.com/package/sarychdb-client)
+SarychDB expone un protocolo TCP propio. El formato de URL es:
 
+```
+sarychdb://usuario@password/database/operacion?query=valor
+```
 
-## 🚀 Start the Server
+También acepta mensajes JSON:
+
+```json
+{
+  "url": "sarychdb://usuario@password/database/operacion",
+  "op": "post",
+  "body": { "campo": "valor" },
+  "queryType": "key",
+  "idUpdate": "...",
+  "page": 1,
+  "limit": 10,
+  "sortBy": "name",
+  "sortOrder": "asc",
+  "filters": { "activo": true }
+}
+```
+
+### 🚀 Iniciar servidor
 
 ```bash
 cargo run
 ```
 
-The server will start on port 3030 by default.
+Puerto por defecto: `4040` (configurable con `--protocol-port` o `SARYCHDB_PROTOCOL_PORT`).
 
-## 📋 API Endpoints
+### 🔧 Operaciones principales
 
-### 1. Create User
-```bash
-curl -X POST http://localhost:3030/api/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "my_secure_password"
-  }'
+- **create_user** / **signup**
+```
+sarychdb://admin@pass/mi_db/create_user
 ```
 
-### 2. Create Database
-```bash
-curl -X POST http://localhost:3030/api/databases \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "my_secure_password",
-    "db_name": "my_database"
-  }'
+- **create_db**
+```
+sarychdb://admin@pass/mi_db/create_db
 ```
 
-### 3. List User Databases
-```bash
-curl "http://localhost:3030/api/databases?username=admin&password=my_secure_password"
+- **delete_db**
+```
+sarychdb://admin@pass/mi_db/delete_db
 ```
 
-## 🔗 SarychDB Protocol
-
-### URL Format:
+- **get** (búsqueda)
 ```
-sarychdb://username@password/database/operation?query=search_value
+sarychdb://admin@pass/mi_db/get?query=valor
 ```
 
-### Available Operations:
-
-#### GET - Search records
-```bash
-# Search all records
-curl "http://localhost:3030/sarych?url=sarychdb://admin@my_secure_password/my_database/get"
-
-# Search records containing "value"
-curl "http://localhost:3030/sarych?url=sarychdb://admin@my_secure_password/my_database/get?query=value"
+- **post** (insertar)
+```json
+{ "url": "sarychdb://admin@pass/mi_db/post", "body": { "name": "Item" } }
 ```
 
-#### POST - Insert record
-```bash
-curl -X POST "http://localhost:3030/sarych?url=sarychdb://admin@my_secure_password/my_database/post" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "John Doe",
-    "age": 30,
-    "email": "john@email.com",
-    "active": true
-  }'
+- **put** (actualizar por query o id)
+```json
+{ "url": "sarychdb://admin@pass/mi_db/put?query=Item", "body": { "price": 10 } }
 ```
 
-#### PUT - Update records
-```bash
-# Update all records containing "John"
-curl -X PUT "http://localhost:3030/sarych?url=sarychdb://admin@my_secure_password/my_database/put?query=John" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "age": 31,
-    "city": "New York"
-  }'
+- **edit** (actualizar por _id)
+```json
+{ "url": "sarychdb://admin@pass/mi_db/edit", "body": { "_id": "...", "price": 12 } }
 ```
 
-#### DELETE - Delete records
-```bash
-# Delete all records containing "inactive"
-curl -X DELETE "http://localhost:3030/sarych?url=sarychdb://admin@my_secure_password/my_database/delete?query=inactive"
+- **delete** (por query)
+```
+sarychdb://admin@pass/mi_db/delete?query=Item
 ```
 
-#### STATS - Database statistics
-```bash
-curl "http://localhost:3030/sarych?url=sarychdb://admin@my_secure_password/my_database/stats"
+- **delete_by_id** (por _id)
+```json
+{ "url": "sarychdb://admin@pass/mi_db/delete_by_id", "body": { "_id": "..." } }
 ```
 
-## 🔍 Parallel Search Engine
-
-The system uses a parallel search engine that:
-
-- **Searches entire JSON structure**: Not just specific fields, but any value
-- **Automatic parallelization**: Divides data into nodes for parallel search
-- **Recursive search**: Explores nested arrays and objects
-- **Multiple data types**: Strings, numbers, booleans, etc.
-
-## 🔐 Authentication
-
-- Users are stored in `users.json`
-- Passwords are encrypted with bcrypt
-- Each user has access only to their own databases
-
-## 📁 File Structure
-
-- `users.json` - Users and their databases
-- `users/{username}/` - User-specific folder
-- `users/{username}/{db_name}.json` - Individual database files
-- Each record includes automatic metadata (`_id`, `_created_at`, `_updated_at`)
-
-## ⚡ Benchmark Mode
-
-To run search engine benchmarks:
-
-```bash
-cargo run benchmark
+- **list_dbs** / **all_dbs**
+```
+sarychdb://admin@pass/mi_db/list_dbs
 ```
 
-## 🌟 Features
+- **stats** / **health**
+```
+sarychdb://admin@pass/mi_db/stats
+```
 
-- ✅ Custom `sarychdb://` protocol
-- ✅ Complete CRUD operations
-- ✅ Multi-node parallel search
-- ✅ User authentication with passwords
-- ✅ Flexible JSON databases
-- ✅ REST API for administration
-- ✅ Automatic record metadata
-- ✅ Database statistics
-- ✅ User-isolated file system
-- ✅ Duplicate name prevention
+### 📁 Ubicación de datos
+
+Por defecto se guardan en:
+
+```
+~/Documents/SarychDB/
+```
+
+Puedes cambiarlo con la variable `SARYCHDB_DATA_DIR`.

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
+use std::env;
 use bcrypt::{hash, verify, DEFAULT_COST};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -28,30 +29,50 @@ pub struct CreateDbRequest {
     pub db_name: String,
 }
 
-const USERS_FILE: &str = "users.json";
+fn data_root() -> PathBuf {
+    env::var("SARYCHDB_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::document_dir()
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+                .join("SarychDB")
+        })
+}
+
+fn users_file_path() -> PathBuf {
+    data_root().join("users.json")
+}
+
+fn user_dir_path(username: &str) -> PathBuf {
+    data_root().join("users").join(username)
+}
 
 pub struct AuthService;
 
 impl AuthService {
     pub fn new() -> Self {
         // Initialize users.json file if it doesn't exist
-        if !Path::new(USERS_FILE).exists() {
+        let users_file = users_file_path();
+        if !users_file.exists() {
             let empty_users: Vec<User> = vec![];
             let json = serde_json::to_string_pretty(&empty_users).unwrap();
-            fs::write(USERS_FILE, json).unwrap();
+            if let Some(parent) = users_file.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(users_file, json).unwrap();
         }
         Self
     }
 
     pub fn load_users() -> Result<Vec<User>, Box<dyn std::error::Error>> {
-        let data = fs::read_to_string(USERS_FILE)?;
+        let data = fs::read_to_string(users_file_path())?;
         let users: Vec<User> = serde_json::from_str(&data)?;
         Ok(users)
     }
 
     pub fn save_users(users: &Vec<User>) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string_pretty(users)?;
-        fs::write(USERS_FILE, json)?;
+        fs::write(users_file_path(), json)?;
         Ok(())
     }
 
@@ -74,7 +95,7 @@ impl AuthService {
             .map_err(|e| e.to_string())?;
 
         // Create user folder
-        let user_dir = format!("users/{}", request.username);
+        let user_dir = user_dir_path(&request.username);
         fs::create_dir_all(&user_dir).map_err(|e| format!("Error creating user folder: {}", e))?;
 
         // Create new user
@@ -87,7 +108,7 @@ impl AuthService {
         users.push(new_user);
         Self::save_users(&users).map_err(|e| e.to_string())?;
 
-        Ok(format!("User '{}' created successfully with folder at: {}", request.username, user_dir))
+        Ok(format!("User '{}' created successfully with folder at: {}", request.username, user_dir.display()))
     }
 
     pub fn authenticate(&self, username: &str, password: &str) -> Result<bool, String> {
@@ -122,16 +143,16 @@ impl AuthService {
             }
 
             // Create empty JSON file for the DB in user folder
-            let user_dir = format!("users/{}", request.username);
-            let db_filepath = format!("{}/{}.json", user_dir, request.db_name);
+            let user_dir = user_dir_path(&request.username);
+            let db_filepath = user_dir.join(format!("{}.json", request.db_name));
             
             // Verify that user folder exists
-            if !Path::new(&user_dir).exists() {
+            if !user_dir.exists() {
                 fs::create_dir_all(&user_dir).map_err(|e| format!("Error creating user folder: {}", e))?;
             }
 
             // Check if file already exists with that name (prevent global duplicates)
-            if Path::new(&db_filepath).exists() {
+            if db_filepath.exists() {
                 return Err("File with that name already exists in user folder".to_string());
             }
 
@@ -145,7 +166,38 @@ impl AuthService {
             });
 
             Self::save_users(&users).map_err(|e| e.to_string())?;
-            Ok(format!("Database '{}' created successfully at: {}", request.db_name, db_filepath))
+            Ok(format!("Database '{}' created successfully at: {}", request.db_name, db_filepath.display()))
+        } else {
+            Err("User not found".to_string())
+        }
+    }
+
+    pub fn delete_database(&self, username: &str, password: &str, db_name: &str) -> Result<String, String> {
+        if !self.authenticate(username, password)? {
+            return Err("Invalid credentials".to_string());
+        }
+
+        if db_name.is_empty() || db_name.contains(' ') || db_name.contains('/') || db_name.contains('\\') {
+            return Err("Invalid database name. Cannot contain spaces or special characters".to_string());
+        }
+
+        let mut users = Self::load_users().map_err(|e| e.to_string())?;
+
+        if let Some(user) = users.iter_mut().find(|u| u.user == username) {
+            let initial_len = user.db.len();
+            user.db.retain(|db| db.namedb != db_name);
+
+            if user.db.len() == initial_len {
+                return Err("Database not found for this user".to_string());
+            }
+
+            let db_filepath = user_dir_path(username).join(format!("{}.json", db_name));
+            if db_filepath.exists() {
+                fs::remove_file(&db_filepath).map_err(|e| format!("Error deleting database file: {}", e))?;
+            }
+
+            Self::save_users(&users).map_err(|e| e.to_string())?;
+            Ok(format!("Database '{}' deleted successfully", db_name))
         } else {
             Err("User not found".to_string())
         }

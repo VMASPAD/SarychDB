@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::env;
 use std::time::Instant;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -26,13 +27,32 @@ impl DatabaseManager {
         Self
     }
 
+    fn data_root() -> PathBuf {
+        env::var("SARYCHDB_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::document_dir()
+                    .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+                    .join("SarychDB")
+            })
+    }
+
     pub fn get_db_path(username: &str, db_name: &str) -> String {
-        format!("users/{}/{}.json", username, db_name)
+        let path = Self::data_root()
+            .join("users")
+            .join(username)
+            .join(format!("{}.json", db_name));
+        path.to_string_lossy().to_string()
     }
 
     pub fn database_exists(username: &str, db_name: &str) -> bool {
         let filepath = Self::get_db_path(username, db_name);
         Path::new(&filepath).exists()
+    }
+
+    pub fn count_records(&self, username: &str, db_name: &str) -> Result<usize, String> {
+        let data = Self::read_database_cached(username, db_name)?;
+        Ok(data.len())
     }
 
     pub fn read_database(username: &str, db_name: &str) -> Result<Vec<Value>, String> {
@@ -212,6 +232,30 @@ impl DatabaseManager {
 
         Self::write_database(username, db_name, &data)?;
         Ok(format!("Updated {} records", updated_count))
+    }
+
+    // DELETE - Delete a record by _id
+    pub fn delete_record_by_id(&self, username: &str, db_name: &str, target_id: &str) -> Result<String, String> {
+        if !Self::database_exists(username, db_name) {
+            return Err("Database does not exist".to_string());
+        }
+
+        let mut data = Self::read_database_cached(username, db_name)?;
+        let initial_count = data.len();
+
+        data.retain(|item| {
+            if let Value::Object(obj) = item {
+                if let Some(Value::String(id)) = obj.get("_id") {
+                    return id != target_id;
+                }
+            }
+            true
+        });
+
+        let deleted_count = initial_count - data.len();
+        Self::write_database(username, db_name, &data)?;
+
+        Ok(format!("Deleted {} records", deleted_count))
     }
 
     // DELETE - Delete records matching query
