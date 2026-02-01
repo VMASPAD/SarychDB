@@ -186,6 +186,7 @@ impl DatabaseManager {
 
     // PUT - Update records with ID support
     pub fn update_records(&self, username: &str, db_name: &str, query: &str, update_data: Value, id_update: Option<&str>) -> Result<String, String> {
+        
         if !Self::database_exists(username, db_name) {
             return Err("Database does not exist".to_string());
         }
@@ -193,19 +194,22 @@ impl DatabaseManager {
         let mut data = Self::read_database_cached(username, db_name)?;
         let mut updated_count = 0;
 
+        // Debug log: Start of update_records
+        println!("[DEBUG] Starting update_records for user: {}, db: {}", username, db_name);
+        println!("[DEBUG] id_update: {:?}, query: {:?}, update_data: {:?}", id_update, query, update_data);
+
         // Update by specific ID if provided
         if let Some(target_id) = id_update {
             for item in &mut data {
-                if let &mut Value::Object(ref obj) = item {
+                if let Value::Object(obj) = item {
                     if let Some(Value::String(id)) = obj.get("_id") {
                         if id == target_id {
-                            if let (Value::Object(target), Value::Object(source)) = (item, &update_data) {
-                                // Update fields from update_data
+                            println!("[DEBUG] Found matching record with _id: {}", id);
+                            if let Value::Object(source) = &update_data {
                                 for (key, value) in source {
-                                    target.insert(key.clone(), value.clone());
+                                    obj.insert(key.clone(), value.clone());
                                 }
-                                // Add update timestamp
-                                target.insert("_updated_at".to_string(), Value::String(Utc::now().to_rfc3339()));
+                                obj.insert("_updated_at".to_string(), Value::String(Utc::now().to_rfc3339()));
                                 updated_count += 1;
                                 break; // Only update one record when using ID
                             }
@@ -217,13 +221,16 @@ impl DatabaseManager {
             // Update by query (existing behavior)
             for item in &mut data {
                 if self.item_matches_query(item, query) {
-                    if let (Value::Object(target), Value::Object(source)) = (item, &update_data) {
-                        // Update fields
+                    println!("[DEBUG] Found matching record for query: {}", query);
+                    if let Value::Object(source) = &update_data {
                         for (key, value) in source {
-                            target.insert(key.clone(), value.clone());
+                            if let Value::Object(target) = item {
+                                target.insert(key.clone(), value.clone());
+                            }
                         }
-                        // Add update timestamp
-                        target.insert("_updated_at".to_string(), Value::String(Utc::now().to_rfc3339()));
+                        if let Value::Object(target) = item {
+                            target.insert("_updated_at".to_string(), Value::String(Utc::now().to_rfc3339()));
+                        }
                         updated_count += 1;
                     }
                 }
@@ -231,6 +238,11 @@ impl DatabaseManager {
         }
 
         Self::write_database(username, db_name, &data)?;
+
+        // Debug log: Cache invalidation
+        println!("[DEBUG] Invalidating cache for user: {}, db: {}", username, db_name);
+        Self::invalidate_cache(username, db_name);
+
         Ok(format!("Updated {} records", updated_count))
     }
 

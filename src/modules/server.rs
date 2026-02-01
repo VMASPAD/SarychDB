@@ -18,9 +18,12 @@ struct ProtocolMessage {
     url: String,
     op: Option<String>,
     body: Option<Value>,
+    query: Option<Value>,
+    #[serde(default, alias = "updateData")]
+    update_data: Option<Value>,
     #[serde(rename = "queryType")]
     query_type: Option<String>,
-    #[serde(rename = "idUpdate")]
+    #[serde(default, alias = "idUpdate")]
     id_update: Option<String>,
     page: Option<usize>,
     limit: Option<usize>,
@@ -142,21 +145,22 @@ impl SarychServer {
             return Ok(serde_json::json!({ "error": "Empty request", "time": elapsed_ms }));
         }
 
-        let (url, op_override, body, query_type, id_update, page, limit, sort_by, sort_order, filters) =
+        let (url, op_override, body, query, update_data, query_type, id_update, page, limit, sort_by, sort_order, filters) =
             if trimmed.starts_with("sarychdb://") {
-                (trimmed.to_string(), None, None, None, None, None, None, None, None, None)
+                (trimmed.to_string(), None, None, None, None, None, None, None, None, None, None, None)
             } else {
                 let msg: ProtocolMessage = match serde_json::from_str(trimmed) {
-                    Ok(msg) => msg,
-                    Err(_) => {
+                    Ok(msg) => { print!("Parsed protocol message: {:?}", msg); msg },
+                    Err(e) => {
                         let elapsed_ms = start_time.elapsed().as_millis() as u64;
+                        println!("[ERROR] JSON parsing error: {}", e);
                         return Ok(serde_json::json!({
-                            "error": "Invalid JSON message. Expected { url: \"sarychdb://...\" }",
+                            "error": format!("Invalid JSON message: {}", e),
                             "time": elapsed_ms
                         }));
                     }
                 };
-                (msg.url, msg.op, msg.body, msg.query_type, msg.id_update, msg.page, msg.limit, msg.sort_by, msg.sort_order, msg.filters)
+                (msg.url, msg.op, msg.body, msg.query, msg.update_data, msg.query_type, msg.id_update, msg.page, msg.limit, msg.sort_by, msg.sort_order, msg.filters)
             };
 
         let protocol = match Self::parse_sarych_url(&url) {
@@ -340,6 +344,56 @@ impl SarychServer {
                     "database": protocol.database,
                     "query": protocol.query,
                     "id_update": id_update,
+                    "message": message
+                }))
+            }
+            "update_records" => {
+                if !auth_service.authenticate(&protocol.username, &protocol.password)? {
+                    return Err("Invalid credentials".to_string());
+                }
+                if let Err(e) = auth_service.user_has_database(&protocol.username, &protocol.password, &protocol.database) {
+                    return Err(format!("Database access denied: {}", e));
+                }
+                
+                // Extract id_update, update_data from body or from separate fields
+                let body_obj = body.as_ref().and_then(|b| b.as_object());
+                
+                let final_id_update = id_update.clone()
+                    .or_else(|| body_obj.and_then(|obj| obj.get("id_update").and_then(|v| v.as_str()).map(String::from)))
+                    .or_else(|| body_obj.and_then(|obj| obj.get("idUpdate").and_then(|v| v.as_str()).map(String::from)));
+                
+                let final_update_data = update_data.clone()
+                    .or_else(|| body_obj.and_then(|obj| obj.get("update_data").cloned()))
+                    .or_else(|| body_obj.and_then(|obj| obj.get("updateData").cloned()))
+                    .or_else(|| {
+                        // If update_data is not found, try to extract it from the rest of the body
+                        // excluding id_update, query, and updateData
+                        body_obj.map(|obj| {
+                            let mut update_obj = obj.clone();
+                            update_obj.remove("id_update");
+                            update_obj.remove("idUpdate");
+                            update_obj.remove("query");
+                            update_obj.remove("update_data");
+                            update_obj.remove("updateData");
+                            Value::Object(update_obj)
+                        })
+                    });
+                
+                println!("[DEBUG] update_records operation - id_update: {:?}, update_data: {:?}", final_id_update, final_update_data);
+                
+                let update_data_value = final_update_data.ok_or("update_data required for UPDATE_RECORDS operation")?;
+                
+                let message = if let Some(id) = final_id_update.as_deref() {
+                    println!("[DEBUG] Updating by ID: {}", id);
+                    db_manager.update_records(&protocol.username, &protocol.database, "", update_data_value, Some(id))?
+                } else {
+                    return Err("id_update required for UPDATE_RECORDS operation".to_string());
+                };
+                
+                Ok(serde_json::json!({
+                    "operation": "update_records",
+                    "database": protocol.database,
+                    "id_update": final_id_update,
                     "message": message
                 }))
             }
