@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::env;
 use bcrypt::{hash, verify, DEFAULT_COST};
+use crate::modules::database::DatabaseManager;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Database {
@@ -241,6 +242,61 @@ impl AuthService {
 
             Self::save_users(&users).map_err(|e| e.to_string())?;
             Ok(format!("Database '{}' deleted successfully", db_name))
+        } else {
+            Err("User not found".to_string())
+        }
+    }
+
+    pub fn rename_database(&self, username: &str, password: &str, old_name: &str, new_name: &str) -> Result<String, String> {
+        if !self.authenticate(username, password)? {
+            return Err("Invalid credentials".to_string());
+        }
+
+        if new_name.is_empty() || new_name.contains(' ') || new_name.contains('/') || new_name.contains('\\') {
+            return Err("Invalid new database name. Cannot contain spaces or special characters".to_string());
+        }
+
+        let mut users = Self::load_users().map_err(|e| e.to_string())?;
+
+        if let Some(user) = users.iter_mut().find(|u| u.user == username) {
+            // Check existence of old DB
+            if !user.db.iter().any(|db| db.namedb == old_name) {
+                return Err("Database not found for this user".to_string());
+            }
+
+            // Prevent overwriting an existing DB with the new name
+            if user.db.iter().any(|db| db.namedb == new_name) {
+                return Err("A database with the new name already exists".to_string());
+            }
+
+            let old_path = user_dir_path(username).join(format!("{}.json", old_name));
+            let new_path = user_dir_path(username).join(format!("{}.json", new_name));
+
+            if !old_path.exists() {
+                return Err("Database file not found".to_string());
+            }
+
+            if new_path.exists() {
+                return Err("File with the new name already exists".to_string());
+            }
+
+            fs::rename(&old_path, &new_path).map_err(|e| format!("Error renaming database file: {}", e))?;
+
+            // Update users metadata
+            for db in &mut user.db {
+                if db.namedb == old_name {
+                    db.namedb = new_name.to_string();
+                    break;
+                }
+            }
+
+            Self::save_users(&users).map_err(|e| e.to_string())?;
+
+            // Invalidate caches for old and new db names
+            DatabaseManager::invalidate_cache(username, old_name);
+            DatabaseManager::invalidate_cache(username, new_name);
+
+            Ok(format!("Database '{}' renamed to '{}'", old_name, new_name))
         } else {
             Err("User not found".to_string())
         }

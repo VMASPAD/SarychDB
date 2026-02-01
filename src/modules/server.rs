@@ -247,6 +247,64 @@ impl SarychServer {
                     "message": message
                 }))
             }
+            "rename_db" | "rename_database" | "update_db_name" => {
+                if !auth_service.authenticate(&protocol.username, &protocol.password)? {
+                    return Err("Invalid credentials".to_string());
+                }
+
+                // Verify user has access to database (old name)
+                if let Err(e) = auth_service.user_has_database(&protocol.username, &protocol.password, &protocol.database) {
+                    return Err(format!("Database access denied: {}", e));
+                }
+
+                // Extract new name from body, update_data, query or id_update
+                let mut new_name: Option<String> = None;
+
+                if let Some(ref b) = body {
+                    if let Value::Object(obj) = b {
+                        if let Some(Value::String(s)) = obj.get("new_name").or_else(|| obj.get("newName")) {
+                            new_name = Some(s.clone());
+                        }
+                    }
+                }
+
+                if new_name.is_none() {
+                    if let Some(ref ud) = update_data {
+                        if let Value::String(s) = ud {
+                            new_name = Some(s.clone());
+                        } else if let Value::Object(obj) = ud {
+                            if let Some(Value::String(s)) = obj.get("new_name").or_else(|| obj.get("newName")) {
+                                new_name = Some(s.clone());
+                            }
+                        }
+                    }
+                }
+
+                if new_name.is_none() {
+                    if let Some(ref qv) = query {
+                        if let Value::String(s) = qv {
+                            new_name = Some(s.clone());
+                        }
+                    }
+                }
+
+                if new_name.is_none() {
+                    if let Some(idu) = id_update.clone() {
+                        new_name = Some(idu);
+                    }
+                }
+
+                let new_name = new_name.ok_or("new_name required for RENAME_DB operation")?;
+
+                let message = auth_service.rename_database(&protocol.username, &protocol.password, &protocol.database, &new_name)?;
+
+                Ok(serde_json::json!({
+                    "operation": "rename_db",
+                    "old_database": protocol.database,
+                    "new_database": new_name,
+                    "message": message
+                }))
+            }
             "list_dbs" | "list_databases" => {
                 let databases = auth_service.get_user_databases(&protocol.username, &protocol.password)?;
                 Ok(serde_json::json!({
@@ -500,7 +558,7 @@ impl SarychServer {
                 db_manager.get_stats(&protocol.username, &protocol.database)
             }
             "health" => Self::health().await,
-            _ => Err("Unsupported operation. Use: get, browse, list, post, put, edit, delete, delete_by_id, delete_db, stats".to_string()),
+            _ => Err("Unsupported operation. Use: get, browse, list, post, put, edit, delete, delete_by_id, delete_db, rename_db, stats".to_string()),
         };
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
