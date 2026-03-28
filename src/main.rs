@@ -165,7 +165,13 @@ async fn run_benchmark_mode(nodes_override: Option<usize>, silent: bool) {
         println!("Running benchmark with {} nodes", num_nodes);
     }
 
-    let data: Vec<Item> = load_json("500MB.json");
+    let data: Vec<Item> = match load_json("500MB.json") {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("❌ Benchmark data error: {}", e);
+            return;
+        }
+    };
     let nodes = split_nodes(data, num_nodes);
 
     let queries = ["T206", "id", "TensorFlow"];

@@ -8,3 +8,5 @@ bench/
 npm_module/
 sarychdb-app/
 .gitignore
+.claude
+.agents

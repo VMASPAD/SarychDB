@@ -114,7 +114,7 @@ impl AuthService {
         Ok(users)
     }
 
-    pub fn save_users(users: &Vec<User>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save_users(users: &[User]) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string_pretty(users)?;
         fs::write(users_file_path(), json)?;
         Ok(())
@@ -322,11 +322,36 @@ impl AuthService {
         }
 
         let users = Self::load_users().map_err(|e| e.to_string())?;
-        
+
         if let Some(user) = users.iter().find(|u| u.user == username) {
             Ok(user.db.iter().any(|db| db.namedb == db_name))
         } else {
             Err("User not found".to_string())
+        }
+    }
+
+    /// Authenticate and verify database access in a single pass (one bcrypt + one disk read).
+    /// Returns Ok(()) on success, Err on bad credentials or missing database.
+    pub fn authenticate_and_check_db(
+        &self,
+        username: &str,
+        password: &str,
+        db_name: &str,
+    ) -> Result<(), String> {
+        let users = Self::load_users().map_err(|e| e.to_string())?;
+        let user = users
+            .iter()
+            .find(|u| u.user == username)
+            .ok_or_else(|| "Invalid credentials".to_string())?;
+
+        if !verify(password, &user.password).map_err(|e| e.to_string())? {
+            return Err("Invalid credentials".to_string());
+        }
+
+        if user.db.iter().any(|db| db.namedb == db_name) {
+            Ok(())
+        } else {
+            Err(format!("Database '{}' not found for this user", db_name))
         }
     }
 }
