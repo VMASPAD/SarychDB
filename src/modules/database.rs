@@ -1,19 +1,17 @@
+use crate::modules::search::{
+    cached_parallel_search, get_optimal_node_count, invalidate_cache_for_path, load_json,
+    search_in_json_value, search_in_json_value_ci, split_nodes,
+};
+use chrono::Utc;
+use once_cell::sync::Lazy;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::env;
-use std::time::Instant;
-use std::collections::HashMap;
 use std::sync::Mutex;
-use once_cell::sync::Lazy;
-use crate::modules::search::{
-    load_json, split_nodes,
-    get_optimal_node_count,
-    invalidate_cache_for_path, cached_parallel_search,
-    search_in_json_value, search_in_json_value_ci,
-};
+use std::time::Instant;
 use uuid::Uuid;
-use chrono::Utc;
 
 static DB_CACHE: Lazy<Mutex<HashMap<String, (Vec<Value>, Instant)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -337,8 +335,7 @@ impl DatabaseManager {
             (Some(p), Some(lim)) => {
                 let page_num = p.max(1);
                 let offset = (page_num - 1) * lim;
-                let paginated_data: Vec<Value> =
-                    data.into_iter().skip(offset).take(lim).collect();
+                let paginated_data: Vec<Value> = data.into_iter().skip(offset).take(lim).collect();
                 let total_pages = if lim > 0 {
                     (total_records as f64 / lim as f64).ceil() as usize
                 } else {
@@ -364,11 +361,9 @@ impl DatabaseManager {
             ),
             (None, None) => {
                 let default_limit = 10;
-                let paginated_data: Vec<Value> =
-                    data.into_iter().take(default_limit).collect();
+                let paginated_data: Vec<Value> = data.into_iter().take(default_limit).collect();
                 let returned = paginated_data.len();
-                let total_pages =
-                    (total_records as f64 / default_limit as f64).ceil() as usize;
+                let total_pages = (total_records as f64 / default_limit as f64).ceil() as usize;
                 Ok(serde_json::json!({
                     "data": paginated_data,
                     "pagination": {
@@ -419,8 +414,7 @@ impl DatabaseManager {
         let page_size = limit.unwrap_or(10);
         let offset = page_num.saturating_sub(1) * page_size;
 
-        let paginated_data: Vec<Value> =
-            data.into_iter().skip(offset).take(page_size).collect();
+        let paginated_data: Vec<Value> = data.into_iter().skip(offset).take(page_size).collect();
         let total_pages = (filtered_count as f64 / page_size as f64).ceil() as usize;
 
         Ok(serde_json::json!({
@@ -441,11 +435,7 @@ impl DatabaseManager {
         }))
     }
 
-    fn matches_filters(
-        &self,
-        item: &Value,
-        filters: &serde_json::Map<String, Value>,
-    ) -> bool {
+    fn matches_filters(&self, item: &Value, filters: &serde_json::Map<String, Value>) -> bool {
         if let Value::Object(obj) = item {
             for (key, filter_value) in filters {
                 match obj.get(key) {
@@ -471,13 +461,7 @@ impl DatabaseManager {
         }
     }
 
-    fn compare_values(
-        &self,
-        a: &Value,
-        b: &Value,
-        field: &str,
-        order: &str,
-    ) -> std::cmp::Ordering {
+    fn compare_values(&self, a: &Value, b: &Value, field: &str, order: &str) -> std::cmp::Ordering {
         let a_val = self.get_field_value(a, field);
         let b_val = self.get_field_value(b, field);
 

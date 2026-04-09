@@ -26,6 +26,12 @@ SarychDB is a lightweight, non-relational document database written in Rust. It 
 # Start the server (default port 4040)
 cargo run
 
+# Start the REST API over HTTP
+cargo run -- --rest --port 4040
+
+# Start the REST API over HTTPS
+cargo run -- --https --port 4040 --tls-cert cert.pem --tls-key key.pem
+
 # Custom port
 cargo run -- --port 5000
 
@@ -38,6 +44,10 @@ cargo run -- benchmark --nodes 8
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` / `--protocol-port` | `4040` | TCP port to listen on |
+| `--rest` / `--http-api` / `--http` | off | Start the REST API instead of the raw TCP protocol server |
+| `--https` | off | Enable HTTPS for REST mode (requires `--tls-cert` and `--tls-key`) |
+| `--tls-cert <PATH>` | env | TLS certificate PEM file used by HTTPS mode |
+| `--tls-key <PATH>` | env | TLS private key PEM file used by HTTPS mode |
 | `--threads <N>` | CPU count | Rayon thread pool size |
 | `--background` / `--silent` | off | Suppress startup output |
 | `benchmark` | — | Run built-in benchmark instead of server |
@@ -48,10 +58,23 @@ cargo run -- benchmark --nodes 8
 | Variable | Description |
 |----------|-------------|
 | `SARYCHDB_PROTOCOL_PORT` | Override default port |
+| `SARYCHDB_HTTP_PORT` | Override the REST API port |
+| `SARYCHDB_TLS_CERT` | TLS certificate PEM file for HTTPS mode |
+| `SARYCHDB_TLS_KEY` | TLS private key PEM file for HTTPS mode |
 | `PORT` | Fallback port (same as above) |
 | `SARYCHDB_DATA_DIR` | Override data directory |
 
 **Default data directory:** `~/Documents/SarychDB/`
+
+---
+
+## REST API Mode
+
+When you start the server with `--rest`, SarychDB exposes HTTP endpoints on the selected port and forwards each request into the same execution engine used by the native protocol. That means the REST layer is a transport wrapper, not a separate data path.
+
+Use `--https` together with `--tls-cert` and `--tls-key` to serve the same API over TLS.
+
+See [REST_API.md](REST_API.md) for the full endpoint reference and usage examples.
 
 ---
 

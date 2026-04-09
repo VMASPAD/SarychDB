@@ -1,8 +1,16 @@
-use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use serde_json::Value;
 use crate::modules::auth::AuthService;
 use crate::modules::database::DatabaseManager;
+use axum::extract::{Path, Query};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 #[derive(Debug)]
 pub struct SarychProtocol {
@@ -34,6 +42,54 @@ struct ProtocolMessage {
     filters: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreateUserBody {
+    username: String,
+    password: String,
+    #[serde(default)]
+    db_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDatabaseBody {
+    username: String,
+    password: String,
+    db_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameDatabaseBody {
+    new_name: String,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct RawProtocolBridge {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    op: Option<String>,
+    #[serde(default)]
+    body: Option<Value>,
+    #[serde(default)]
+    query: Option<Value>,
+    #[serde(default, alias = "updateData")]
+    update_data: Option<Value>,
+    #[serde(default, rename = "queryType")]
+    query_type: Option<String>,
+    #[serde(default, alias = "idUpdate")]
+    id_update: Option<String>,
+    #[serde(default)]
+    page: Option<usize>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default, rename = "sortBy")]
+    sort_by: Option<String>,
+    #[serde(default, rename = "sortOrder")]
+    sort_order: Option<String>,
+    #[serde(default)]
+    filters: Option<Value>,
+}
+
 pub struct SarychServer {}
 
 impl SarychServer {
@@ -54,9 +110,7 @@ impl SarychServer {
         let parts: Vec<&str> = main_part.split('/').collect();
 
         if parts.len() < 2 {
-            return Err(
-                "Invalid format. Use: sarychdb://username@password/database/".to_string(),
-            );
+            return Err("Invalid format. Use: sarychdb://username@password/database/".to_string());
         }
 
         let auth_part = parts[0];
@@ -67,16 +121,12 @@ impl SarychServer {
             .filter(|op| !op.is_empty());
 
         if !auth_part.contains('@') {
-            return Err(
-                "Invalid authentication format. Use: username@password".to_string(),
-            );
+            return Err("Invalid authentication format. Use: username@password".to_string());
         }
 
         let auth_parts: Vec<&str> = auth_part.splitn(2, '@').collect();
         if auth_parts.len() != 2 {
-            return Err(
-                "Invalid authentication format. Use: username@password".to_string(),
-            );
+            return Err("Invalid authentication format. Use: username@password".to_string());
         }
 
         let username = auth_parts[0].to_string();
@@ -195,10 +245,11 @@ impl SarychServer {
 
         let result = match operation.as_str() {
             "create_user" | "signup" => {
-                let user_result = auth_service.create_user(crate::modules::auth::CreateUserRequest {
-                    username: protocol.username.clone(),
-                    password: protocol.password.clone(),
-                });
+                let user_result =
+                    auth_service.create_user(crate::modules::auth::CreateUserRequest {
+                        username: protocol.username.clone(),
+                        password: protocol.password.clone(),
+                    });
 
                 let mut responses = Vec::new();
 
@@ -278,10 +329,7 @@ impl SarychServer {
 
                 let body_obj = body.as_ref().and_then(|b| b.as_object());
                 let mut new_name: Option<String> = body_obj
-                    .and_then(|obj| {
-                        obj.get("new_name")
-                            .or_else(|| obj.get("newName"))
-                    })
+                    .and_then(|obj| obj.get("new_name").or_else(|| obj.get("newName")))
                     .and_then(|v| v.as_str())
                     .map(String::from);
 
@@ -299,7 +347,11 @@ impl SarychServer {
 
                 if new_name.is_none() {
                     new_name = query.as_ref().and_then(|qv| {
-                        if let Value::String(s) = qv { Some(s.clone()) } else { None }
+                        if let Value::String(s) = qv {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
                     });
                 }
 
@@ -307,8 +359,7 @@ impl SarychServer {
                     new_name = id_update.clone();
                 }
 
-                let new_name =
-                    new_name.ok_or("new_name required for RENAME_DB operation")?;
+                let new_name = new_name.ok_or("new_name required for RENAME_DB operation")?;
 
                 let message = auth_service.rename_database(
                     &protocol.username,
@@ -471,16 +522,14 @@ impl SarychServer {
 
                 let body_obj = body.as_ref().and_then(|b| b.as_object());
 
-                let final_id_update = id_update
-                    .clone()
-                    .or_else(|| {
-                        body_obj.and_then(|obj| {
-                            obj.get("id_update")
-                                .or_else(|| obj.get("idUpdate"))
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
-                    });
+                let final_id_update = id_update.clone().or_else(|| {
+                    body_obj.and_then(|obj| {
+                        obj.get("id_update")
+                            .or_else(|| obj.get("idUpdate"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                });
 
                 let final_update_data = update_data
                     .clone()
@@ -503,8 +552,8 @@ impl SarychServer {
                         })
                     });
 
-                let update_data_value = final_update_data
-                    .ok_or("update_data required for UPDATE_RECORDS operation")?;
+                let update_data_value =
+                    final_update_data.ok_or("update_data required for UPDATE_RECORDS operation")?;
 
                 let message = if let Some(id) = final_id_update.as_deref() {
                     db_manager.update_records(
@@ -709,12 +758,9 @@ impl SarychServer {
                     return;
                 }
 
-                let request =
-                    String::from_utf8_lossy(&buffer[..read]).trim().to_string();
+                let request = String::from_utf8_lossy(&buffer[..read]).trim().to_string();
                 let response = match SarychServer::handle_protocol_message(request).await {
-                    Ok(json) => {
-                        serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string())
-                    }
+                    Ok(json) => serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string()),
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
                 };
 
@@ -722,5 +768,521 @@ impl SarychServer {
                 let _ = socket.write_all(b"\n").await;
             });
         }
+    }
+
+    pub async fn start_rest_server(
+        port: u16,
+        https: bool,
+        tls_cert_path: Option<String>,
+        tls_key_path: Option<String>,
+    ) {
+        let app = Router::new()
+            .route("/health", get(Self::http_health))
+            .route("/api/users", post(Self::http_create_user))
+            .route(
+                "/api/databases",
+                post(Self::http_create_database).get(Self::http_list_databases),
+            )
+            .route(
+                "/api/databases/:database",
+                delete(Self::http_delete_database).patch(Self::http_rename_database),
+            )
+            .route("/api/databases/:database/stats", get(Self::http_stats))
+            .route(
+                "/api/databases/:database/browse",
+                get(Self::http_browse_records),
+            )
+            .route(
+                "/api/databases/:database/list",
+                get(Self::http_list_records),
+            )
+            .route(
+                "/api/databases/:database/records",
+                get(Self::http_get_records)
+                    .post(Self::http_insert_record)
+                    .put(Self::http_update_records)
+                    .delete(Self::http_delete_records),
+            )
+            .route(
+                "/sarych",
+                get(Self::http_protocol_bridge_get).post(Self::http_protocol_bridge_post),
+            );
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+        if https {
+            let cert_path = match tls_cert_path {
+                Some(path) => path,
+                None => {
+                    eprintln!("❌ HTTPS mode requires a TLS certificate path.");
+                    return;
+                }
+            };
+
+            let key_path = match tls_key_path {
+                Some(path) => path,
+                None => {
+                    eprintln!("❌ HTTPS mode requires a TLS private key path.");
+                    return;
+                }
+            };
+
+            let tls_config =
+                match axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
+                    .await
+                {
+                    Ok(config) => config,
+                    Err(error) => {
+                        eprintln!("❌ Failed to load TLS configuration: {}", error);
+                        return;
+                    }
+                };
+
+            println!("🔐 SarychDB REST API started on https://{}", addr);
+            if let Err(error) = axum_server::bind_rustls(addr, tls_config)
+                .serve(app.into_make_service())
+                .await
+            {
+                eprintln!("❌ HTTPS server error: {}", error);
+            }
+            return;
+        }
+
+        println!("🌐 SarychDB REST API started on http://{}", addr);
+        if let Err(error) = axum_server::bind(addr).serve(app.into_make_service()).await {
+            eprintln!("❌ HTTP server error: {}", error);
+        }
+    }
+
+    async fn http_health() -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "operation": "health",
+                "status": "ok",
+                "message": "SarychDB is healthy"
+            })),
+        )
+    }
+
+    async fn http_create_user(Json(body): Json<CreateUserBody>) -> impl IntoResponse {
+        let payload = serde_json::json!({
+            "url": format!(
+                "sarychdb://{}@{}/{}/create_user",
+                body.username,
+                body.password,
+                body.db_name.unwrap_or_default()
+            )
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_create_database(Json(body): Json<CreateDatabaseBody>) -> impl IntoResponse {
+        let payload = serde_json::json!({
+            "url": format!(
+                "sarychdb://{}@{}/{}/create_db",
+                body.username,
+                body.password,
+                body.db_name
+            )
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_list_databases(
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}", username, password, ""),
+            "op": "list_dbs"
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_delete_database(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/delete_db", username, password, database)
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_rename_database(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+        Json(body): Json<RenameDatabaseBody>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/rename_db", username, password, database),
+            "body": { "new_name": body.new_name }
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_stats(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/stats", username, password, database)
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_browse_records(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/browse", username, password, database),
+            "page": Self::extract_usize(&headers, &query, "page"),
+            "limit": Self::extract_usize(&headers, &query, "limit")
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_list_records(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/list", username, password, database),
+            "page": Self::extract_usize(&headers, &query, "page"),
+            "limit": Self::extract_usize(&headers, &query, "limit"),
+            "sortBy": Self::extract_string(&headers, &query, "sortBy"),
+            "sortOrder": Self::extract_string(&headers, &query, "sortOrder"),
+            "filters": Self::extract_json_value(&headers, &query, "filters")
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_get_records(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/get", username, password, database),
+            "query": Self::extract_string(&headers, &query, "query"),
+            "queryType": Self::extract_string(&headers, &query, "queryType")
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_insert_record(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+        Json(body): Json<Value>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/post", username, password, database),
+            "body": body
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_update_records(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+        Json(body): Json<Value>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/put", username, password, database),
+            "query": Self::extract_string(&headers, &query, "query"),
+            "queryType": Self::extract_string(&headers, &query, "queryType"),
+            "idUpdate": Self::extract_string(&headers, &query, "idUpdate"),
+            "body": body
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_delete_records(
+        Path(database): Path<String>,
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let (username, password) = match Self::extract_credentials(&headers, &query) {
+            Some(credentials) => credentials,
+            None => {
+                return Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "username and password are required",
+                );
+            }
+        };
+
+        let payload = serde_json::json!({
+            "url": format!("sarychdb://{}@{}/{}/delete", username, password, database),
+            "query": Self::extract_string(&headers, &query, "query"),
+            "idUpdate": Self::extract_string(&headers, &query, "idUpdate")
+        });
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_protocol_bridge_get(
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        let payload = if let Some(url) = query.get("url") {
+            serde_json::json!({
+                "url": url,
+                "op": Self::extract_string(&headers, &query, "op"),
+                "query": Self::extract_string(&headers, &query, "query"),
+                "queryType": Self::extract_string(&headers, &query, "queryType"),
+                "idUpdate": Self::extract_string(&headers, &query, "idUpdate"),
+                "page": Self::extract_usize(&headers, &query, "page"),
+                "limit": Self::extract_usize(&headers, &query, "limit"),
+                "sortBy": Self::extract_string(&headers, &query, "sortBy"),
+                "sortOrder": Self::extract_string(&headers, &query, "sortOrder"),
+                "filters": Self::extract_json_value(&headers, &query, "filters"),
+            })
+        } else {
+            return Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "url query parameter is required for /sarych requests",
+            );
+        };
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn http_protocol_bridge_post(
+        headers: HeaderMap,
+        Query(query): Query<HashMap<String, String>>,
+        Json(body): Json<RawProtocolBridge>,
+    ) -> impl IntoResponse {
+        let payload = if body.url.is_some() {
+            let mut payload = serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(url) = query.get("url") {
+                if let Some(map) = payload.as_object_mut() {
+                    map.insert("url".to_string(), serde_json::Value::String(url.clone()));
+                }
+            }
+            payload
+        } else if let Some(url) = query.get("url") {
+            serde_json::json!({
+                "url": url,
+                "op": Self::extract_string(&headers, &query, "op"),
+                "body": body.body,
+                "query": body.query,
+                "updateData": body.update_data,
+                "queryType": body.query_type,
+                "idUpdate": body.id_update,
+                "page": body.page,
+                "limit": body.limit,
+                "sortBy": body.sort_by,
+                "sortOrder": body.sort_order,
+                "filters": body.filters,
+            })
+        } else {
+            serde_json::json!({
+                "url": body.url.unwrap_or_default(),
+                "op": body.op,
+                "body": body.body,
+                "query": body.query,
+                "updateData": body.update_data,
+                "queryType": body.query_type,
+                "idUpdate": body.id_update,
+                "page": body.page,
+                "limit": body.limit,
+                "sortBy": body.sort_by,
+                "sortOrder": body.sort_order,
+                "filters": body.filters,
+            })
+        };
+
+        Self::dispatch_payload(payload).await
+    }
+
+    async fn dispatch_payload(payload: Value) -> (StatusCode, Json<Value>) {
+        match serde_json::to_string(&payload) {
+            Ok(raw) => match SarychServer::handle_protocol_message(raw).await {
+                Ok(response) => {
+                    if let Some(error) = response.get("error").and_then(|value| value.as_str()) {
+                        Self::error_response(Self::status_for_error(error), error)
+                    } else {
+                        (StatusCode::OK, Json(response))
+                    }
+                }
+                Err(error) => Self::error_response(Self::status_for_error(&error), error),
+            },
+            Err(error) => Self::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize request payload: {}", error),
+            ),
+        }
+    }
+
+    fn status_for_error(error: &str) -> StatusCode {
+        let message = error.to_lowercase();
+        if message.contains("invalid credentials") {
+            StatusCode::UNAUTHORIZED
+        } else if message.contains("not found") || message.contains("does not exist") {
+            StatusCode::NOT_FOUND
+        } else if message.contains("required") || message.contains("invalid") {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::BAD_REQUEST
+        }
+    }
+
+    fn error_response(
+        message_status: StatusCode,
+        message: impl Into<String>,
+    ) -> (StatusCode, Json<Value>) {
+        (
+            message_status,
+            Json(serde_json::json!({ "error": message.into() })),
+        )
+    }
+
+    fn extract_credentials(
+        headers: &HeaderMap,
+        query: &HashMap<String, String>,
+    ) -> Option<(String, String)> {
+        let username = Self::extract_string(headers, query, "username")?;
+        let password = Self::extract_string(headers, query, "password")?;
+        Some((username, password))
+    }
+
+    fn extract_string(
+        headers: &HeaderMap,
+        query: &HashMap<String, String>,
+        key: &str,
+    ) -> Option<String> {
+        headers
+            .get(key)
+            .and_then(|value| value.to_str().ok())
+            .map(String::from)
+            .or_else(|| query.get(key).cloned())
+    }
+
+    fn extract_usize(
+        headers: &HeaderMap,
+        query: &HashMap<String, String>,
+        key: &str,
+    ) -> Option<usize> {
+        Self::extract_string(headers, query, key).and_then(|value| value.parse::<usize>().ok())
+    }
+
+    fn extract_json_value(
+        headers: &HeaderMap,
+        query: &HashMap<String, String>,
+        key: &str,
+    ) -> Option<Value> {
+        Self::extract_string(headers, query, key)
+            .and_then(|value| serde_json::from_str(&value).ok())
     }
 }

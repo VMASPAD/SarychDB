@@ -1,9 +1,9 @@
+use crate::modules::database::DatabaseManager;
+use bcrypt::{DEFAULT_COST, hash, verify};
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::env;
-use bcrypt::{hash, verify, DEFAULT_COST};
-use crate::modules::database::DatabaseManager;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Database {
@@ -77,7 +77,10 @@ fn migrate_legacy_data_if_needed() {
     let new_users_dir = new_root.join("users");
     if legacy_users_dir.exists() && !new_users_dir.exists() {
         if let Err(e) = fs::rename(&legacy_users_dir, &new_users_dir) {
-            eprintln!("⚠️  Failed to move users directory to {:?}: {}", new_users_dir, e);
+            eprintln!(
+                "⚠️  Failed to move users directory to {:?}: {}",
+                new_users_dir, e
+            );
         }
     }
 }
@@ -122,21 +125,26 @@ impl AuthService {
 
     pub fn create_user(&self, request: CreateUserRequest) -> Result<String, String> {
         let mut users = Self::load_users().map_err(|e| e.to_string())?;
-        
+
         // Check if user already exists
         if users.iter().any(|u| u.user == request.username) {
             return Err("User already exists".to_string());
         }
 
         // Validate username (no spaces, special characters)
-        if request.username.is_empty() || request.username.contains(' ') || 
-           request.username.contains('/') || request.username.contains('\\') {
-            return Err("Invalid username. Cannot contain spaces or special characters".to_string());
+        if request.username.is_empty()
+            || request.username.contains(' ')
+            || request.username.contains('/')
+            || request.username.contains('\\')
+        {
+            return Err(
+                "Invalid username. Cannot contain spaces or special characters".to_string(),
+            );
         }
 
         // Hash the password
-        let password_hash = hash(request.password.as_bytes(), DEFAULT_COST)
-            .map_err(|e| e.to_string())?;
+        let password_hash =
+            hash(request.password.as_bytes(), DEFAULT_COST).map_err(|e| e.to_string())?;
 
         // Create user folder
         let user_dir = user_dir_path(&request.username);
@@ -152,12 +160,16 @@ impl AuthService {
         users.push(new_user);
         Self::save_users(&users).map_err(|e| e.to_string())?;
 
-        Ok(format!("User '{}' created successfully with folder at: {}", request.username, user_dir.display()))
+        Ok(format!(
+            "User '{}' created successfully with folder at: {}",
+            request.username,
+            user_dir.display()
+        ))
     }
 
     pub fn authenticate(&self, username: &str, password: &str) -> Result<bool, String> {
         let users = Self::load_users().map_err(|e| e.to_string())?;
-        
+
         if let Some(user) = users.iter().find(|u| u.user == username) {
             verify(password, &user.password).map_err(|e| e.to_string())
         } else {
@@ -172,13 +184,18 @@ impl AuthService {
         }
 
         // Validate database name
-        if request.db_name.is_empty() || request.db_name.contains(' ') || 
-           request.db_name.contains('/') || request.db_name.contains('\\') {
-            return Err("Invalid database name. Cannot contain spaces or special characters".to_string());
+        if request.db_name.is_empty()
+            || request.db_name.contains(' ')
+            || request.db_name.contains('/')
+            || request.db_name.contains('\\')
+        {
+            return Err(
+                "Invalid database name. Cannot contain spaces or special characters".to_string(),
+            );
         }
 
         let mut users = Self::load_users().map_err(|e| e.to_string())?;
-        
+
         // Find the user
         if let Some(user) = users.iter_mut().find(|u| u.user == request.username) {
             // Check if DB already exists
@@ -189,10 +206,11 @@ impl AuthService {
             // Create empty JSON file for the DB in user folder
             let user_dir = user_dir_path(&request.username);
             let db_filepath = user_dir.join(format!("{}.json", request.db_name));
-            
+
             // Verify that user folder exists
             if !user_dir.exists() {
-                fs::create_dir_all(&user_dir).map_err(|e| format!("Error creating user folder: {}", e))?;
+                fs::create_dir_all(&user_dir)
+                    .map_err(|e| format!("Error creating user folder: {}", e))?;
             }
 
             // Check if file already exists with that name (prevent global duplicates)
@@ -202,7 +220,8 @@ impl AuthService {
 
             let empty_data: Vec<serde_json::Value> = vec![];
             let json = serde_json::to_string_pretty(&empty_data).unwrap();
-            fs::write(&db_filepath, json).map_err(|e| format!("Error creating database file: {}", e))?;
+            fs::write(&db_filepath, json)
+                .map_err(|e| format!("Error creating database file: {}", e))?;
 
             // Add DB to user
             user.db.push(Database {
@@ -210,19 +229,34 @@ impl AuthService {
             });
 
             Self::save_users(&users).map_err(|e| e.to_string())?;
-            Ok(format!("Database '{}' created successfully at: {}", request.db_name, db_filepath.display()))
+            Ok(format!(
+                "Database '{}' created successfully at: {}",
+                request.db_name,
+                db_filepath.display()
+            ))
         } else {
             Err("User not found".to_string())
         }
     }
 
-    pub fn delete_database(&self, username: &str, password: &str, db_name: &str) -> Result<String, String> {
+    pub fn delete_database(
+        &self,
+        username: &str,
+        password: &str,
+        db_name: &str,
+    ) -> Result<String, String> {
         if !self.authenticate(username, password)? {
             return Err("Invalid credentials".to_string());
         }
 
-        if db_name.is_empty() || db_name.contains(' ') || db_name.contains('/') || db_name.contains('\\') {
-            return Err("Invalid database name. Cannot contain spaces or special characters".to_string());
+        if db_name.is_empty()
+            || db_name.contains(' ')
+            || db_name.contains('/')
+            || db_name.contains('\\')
+        {
+            return Err(
+                "Invalid database name. Cannot contain spaces or special characters".to_string(),
+            );
         }
 
         let mut users = Self::load_users().map_err(|e| e.to_string())?;
@@ -237,7 +271,8 @@ impl AuthService {
 
             let db_filepath = user_dir_path(username).join(format!("{}.json", db_name));
             if db_filepath.exists() {
-                fs::remove_file(&db_filepath).map_err(|e| format!("Error deleting database file: {}", e))?;
+                fs::remove_file(&db_filepath)
+                    .map_err(|e| format!("Error deleting database file: {}", e))?;
             }
 
             Self::save_users(&users).map_err(|e| e.to_string())?;
@@ -247,13 +282,26 @@ impl AuthService {
         }
     }
 
-    pub fn rename_database(&self, username: &str, password: &str, old_name: &str, new_name: &str) -> Result<String, String> {
+    pub fn rename_database(
+        &self,
+        username: &str,
+        password: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<String, String> {
         if !self.authenticate(username, password)? {
             return Err("Invalid credentials".to_string());
         }
 
-        if new_name.is_empty() || new_name.contains(' ') || new_name.contains('/') || new_name.contains('\\') {
-            return Err("Invalid new database name. Cannot contain spaces or special characters".to_string());
+        if new_name.is_empty()
+            || new_name.contains(' ')
+            || new_name.contains('/')
+            || new_name.contains('\\')
+        {
+            return Err(
+                "Invalid new database name. Cannot contain spaces or special characters"
+                    .to_string(),
+            );
         }
 
         let mut users = Self::load_users().map_err(|e| e.to_string())?;
@@ -280,7 +328,8 @@ impl AuthService {
                 return Err("File with the new name already exists".to_string());
             }
 
-            fs::rename(&old_path, &new_path).map_err(|e| format!("Error renaming database file: {}", e))?;
+            fs::rename(&old_path, &new_path)
+                .map_err(|e| format!("Error renaming database file: {}", e))?;
 
             // Update users metadata
             for db in &mut user.db {
@@ -302,13 +351,17 @@ impl AuthService {
         }
     }
 
-    pub fn get_user_databases(&self, username: &str, password: &str) -> Result<Vec<Database>, String> {
+    pub fn get_user_databases(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<Vec<Database>, String> {
         if !self.authenticate(username, password)? {
             return Err("Invalid credentials".to_string());
         }
 
         let users = Self::load_users().map_err(|e| e.to_string())?;
-        
+
         if let Some(user) = users.iter().find(|u| u.user == username) {
             Ok(user.db.clone())
         } else {
@@ -316,7 +369,12 @@ impl AuthService {
         }
     }
 
-    pub fn user_has_database(&self, username: &str, password: &str, db_name: &str) -> Result<bool, String> {
+    pub fn user_has_database(
+        &self,
+        username: &str,
+        password: &str,
+        db_name: &str,
+    ) -> Result<bool, String> {
         if !self.authenticate(username, password)? {
             return Err("Invalid credentials".to_string());
         }

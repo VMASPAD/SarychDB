@@ -1,10 +1,10 @@
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use once_cell::sync::Lazy;
 
 pub type Item = Value;
 
@@ -37,7 +37,10 @@ fn cache_key(path: &str, query: &str) -> String {
 pub fn get_cached_search(path: &str, query: &str) -> Option<Vec<Value>> {
     let cache = SEARCH_CACHE.lock().unwrap();
     let key = cache_key(path, query);
-    cache.get(&key).filter(|e| e.is_valid()).map(|e| e.results.clone())
+    cache
+        .get(&key)
+        .filter(|e| e.is_valid())
+        .map(|e| e.results.clone())
 }
 
 pub fn cache_search_results(path: &str, query: &str, results: Vec<Value>, ttl_seconds: u64) {
@@ -48,7 +51,14 @@ pub fn cache_search_results(path: &str, query: &str, results: Vec<Value>, ttl_se
         .unwrap()
         .as_secs();
 
-    cache.insert(key, CacheEntry { results, timestamp, ttl_seconds });
+    cache.insert(
+        key,
+        CacheEntry {
+            results,
+            timestamp,
+            ttl_seconds,
+        },
+    );
 
     // Auto cleanup when cache grows too large
     if cache.len() > 100 {
@@ -71,8 +81,8 @@ pub fn clear_search_cache() {
 
 /// Load a JSON array from disk. Returns Err instead of panicking on failure.
 pub fn load_json(path: &str) -> Result<Vec<Item>, String> {
-    let data = fs::read_to_string(path)
-        .map_err(|e| format!("Cannot read file '{}': {}", path, e))?;
+    let data =
+        fs::read_to_string(path).map_err(|e| format!("Cannot read file '{}': {}", path, e))?;
     serde_json::from_str::<Vec<Value>>(&data)
         .map_err(|e| format!("JSON parse error in '{}': {}", path, e))
 }
@@ -116,8 +126,12 @@ pub fn search_in_json_value_ci(value: &Value, query_lower: &str) -> bool {
         Value::String(s) => s.to_lowercase().contains(query_lower),
         Value::Number(n) => n.to_string().contains(query_lower),
         Value::Bool(b) => b.to_string().contains(query_lower),
-        Value::Array(arr) => arr.iter().any(|item| search_in_json_value_ci(item, query_lower)),
-        Value::Object(obj) => obj.values().any(|v| search_in_json_value_ci(v, query_lower)),
+        Value::Array(arr) => arr
+            .iter()
+            .any(|item| search_in_json_value_ci(item, query_lower)),
+        Value::Object(obj) => obj
+            .values()
+            .any(|v| search_in_json_value_ci(v, query_lower)),
         Value::Null => false,
     }
 }
@@ -132,7 +146,8 @@ pub fn search_node<'a>(node: &'a [Item], query: &str) -> Vec<&'a Item> {
 
 /// Centralized search: flattens all nodes into one pass (small datasets).
 pub fn centralized_search<'a>(nodes: &'a [Vec<Item>], query: &str) -> Vec<&'a Item> {
-    nodes.iter()
+    nodes
+        .iter()
         .flat_map(|n| n.iter())
         .filter(|item| search_in_json_value(item, query))
         .collect()
@@ -140,14 +155,13 @@ pub fn centralized_search<'a>(nodes: &'a [Vec<Item>], query: &str) -> Vec<&'a It
 
 /// Sequential multi-node search (small datasets, no threading overhead).
 pub fn sequential_search<'a>(nodes: &'a [Vec<Item>], query: &str) -> Vec<&'a Item> {
-    nodes.iter()
-        .flat_map(|n| search_node(n, query))
-        .collect()
+    nodes.iter().flat_map(|n| search_node(n, query)).collect()
 }
 
 /// Parallel multi-node search using all available CPU cores.
 pub fn parallel_search<'a>(nodes: &'a [Vec<Item>], query: &str) -> Vec<&'a Item> {
-    nodes.par_iter()
+    nodes
+        .par_iter()
         .flat_map(|n| search_node(n, query))
         .collect()
 }
@@ -166,10 +180,7 @@ pub fn cached_parallel_search(
         return cached;
     }
 
-    let results: Vec<Value> = parallel_search(nodes, query)
-        .into_iter()
-        .cloned()
-        .collect();
+    let results: Vec<Value> = parallel_search(nodes, query).into_iter().cloned().collect();
 
     cache_search_results(path, query, results.clone(), ttl_seconds);
     results
